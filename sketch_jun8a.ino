@@ -12,12 +12,12 @@ String CHAT_ID = "123456789"; // Замените на ваш ID чата
 
 // Настройки пина и задержек реле
 int relayPin = 26; // G26 для реле
-const unsigned long turnOnDelay = 100;  // Задержка для включения, мс
-const unsigned long turnOffDelay = 5000; // Задержка для выключения, мс
+const unsigned long turnOnDelay = 300;  // Задержка для включения в импульсном режиме, мс
+const unsigned long turnOffDelay = 300; // Задержка для выключения в импульсном режиме, мс
 
 // Настройки батареи и зарядки
 const float chargingHighThreshold = 4.2;  // Верхний порог для зарядки, В
-const float chargingLowThreshold = 4.1;   // Нижний порог для зарядки, В
+const float chargingLowThreshold = 4.0;   // Нижний порог для зарядки, В
 const unsigned long batteryCheckInterval = 5000; // Проверка батареи каждые 5 секунд
 
 // Настройки авто-отключения экрана
@@ -25,6 +25,9 @@ const unsigned long autoOffTimeout = 10000; // Время бездействия
 
 // Настройка размера шрифта
 const uint8_t fontSize = 2; // Размер шрифта (1 = мелкий, 2 = средний, 3 = крупный)
+
+// Настройка режима реле
+bool isPulseMode = true; // true = импульсный режим (как кнопка), false = постоянный режим (как переключатель)
 
 // Глобальные переменные
 WiFiClientSecure client;
@@ -52,6 +55,7 @@ void updateDisplay() {
   M5.Lcd.println("Wi-Fi: " + wifiStatus);
   M5.Lcd.println("IP: " + ip);
   M5.Lcd.println("Pin: G26");
+  M5.Lcd.println("Mode: " + String(isPulseMode ? "Pulse" : "Switch"));
   M5.Lcd.println("Last Cmd: " + lastCommand);
   M5.Lcd.println("Relay: " + String(computerOn ? "ON" : "OFF"));
   M5.Lcd.println("Battery: " + String(batteryLevel) + "%");
@@ -82,7 +86,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Starting M5StickC+2...");
   pinMode(relayPin, OUTPUT);
-  digitalWrite(relayPin, LOW);
+  digitalWrite(relayPin, LOW); // Реле выключено по умолчанию
 
   // Инициализация питания
   M5.Power.begin();
@@ -140,7 +144,7 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiStatus != "Disconnected") {
       wifiStatus = "Disconnected";
-      ip = "N/A";
+      ip = "";
       bot.sendMessage(CHAT_ID, "Wi-Fi disconnected!", "");
       Serial.println("WiFi disconnected, reconnecting...");
       displayNeedsUpdate = true;
@@ -175,7 +179,7 @@ void loop() {
       newIsCharging = false;
     }
     Serial.println("Battery Level: " + String(newBatteryLevel) + "%");
-    Serial.println("Battery Voltage: " + String(newBatteryVoltage) + "V");
+    Serial.println("Voltage: " + String(newBatteryVoltage) + "V");
     Serial.println("Is Charging: " + String(newIsCharging ? "Yes" : "No"));
     Serial.println("Raw isCharging: " + String(M5.Power.isCharging() ? "Yes" : "No"));
     if (newBatteryLevel != batteryLevel || newIsCharging != isCharging) {
@@ -215,13 +219,29 @@ void loop() {
           welcome += "Commands:\n";
           welcome += "/turn_on : Turn on PC\n";
           welcome += "/turn_off : Turn off PC\n";
-          welcome += "/status : Check PC status";
+          welcome += "/status : Check PC status\n";
+          welcome += "/mode : Toggle relay mode (Pulse/Switch)";
           bot.sendMessage(chat_id, welcome, "");
+        } else if (text == "/mode") {
+          isPulseMode = !isPulseMode; // Переключаем режим
+          String mode = isPulseMode ? "Pulse" : "Switch";
+          bot.sendMessage(chat_id, "Relay mode set to: " + mode, "");
+          Serial.println("Relay mode set to: " + mode);
+          // Если переключаем в импульсный режим, выключаем реле
+          if (isPulseMode) {
+            digitalWrite(relayPin, LOW);
+          }
+          displayNeedsUpdate = true;
+          handleActivity(); // Пробуждаем экран
         } else if (text == "/turn_on") {
           if (!computerOn) {
-            digitalWrite(relayPin, HIGH);
-            delay(turnOnDelay);
-            digitalWrite(relayPin, LOW);
+            if (isPulseMode) {
+              digitalWrite(relayPin, HIGH);
+              delay(turnOnDelay);
+              digitalWrite(relayPin, LOW);
+            } else {
+              digitalWrite(relayPin, HIGH); // Постоянный режим: реле остаётся включённым
+            }
             computerOn = true;
             bot.sendMessage(chat_id, "Computer turned on", "");
             Serial.println("Computer turned on");
@@ -231,9 +251,13 @@ void loop() {
           }
         } else if (text == "/turn_off") {
           if (computerOn) {
-            digitalWrite(relayPin, HIGH);
-            delay(turnOffDelay);
-            digitalWrite(relayPin, LOW);
+            if (isPulseMode) {
+              digitalWrite(relayPin, HIGH);
+              delay(turnOffDelay);
+              digitalWrite(relayPin, LOW);
+            } else {
+              digitalWrite(relayPin, LOW); // Постоянный режим: реле выключается
+            }
             computerOn = false;
             bot.sendMessage(chat_id, "Computer turned off", "");
             Serial.println("Computer turned off");
@@ -242,8 +266,9 @@ void loop() {
             Serial.println("Computer already OFF");
           }
         } else if (text == "/status") {
-          bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF"), "");
-          Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF"));
+          String mode = isPulseMode ? "Pulse" : "Switch";
+          bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF") + "\nMode: " + mode, "");
+          Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF") + ", Mode: " + mode);
         } else {
           bot.sendMessage(chat_id, "Invalid command", "");
           Serial.println("Invalid command: " + text);
