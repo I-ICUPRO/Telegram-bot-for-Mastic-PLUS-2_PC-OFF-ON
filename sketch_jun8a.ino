@@ -23,7 +23,7 @@ const unsigned long batteryCheckInterval = 5000;
 const unsigned long autoOffTimeout = 10000;
 
 // Настройка размера шрифта
-const uint8_t fontSize = 2;
+const float fontSize = 1.7;
 
 // Настройка реле
 bool isLowLevelTrigger = true; // true = low-level (LOW = включено)
@@ -43,7 +43,9 @@ bool displayNeedsUpdate = true;
 int batteryLevel = 0;
 bool isCharging = false;
 float lastBatteryVoltage = 0.0;
-bool autoOffEnabled = false;
+
+//авто-выключение экрана. false - не выключаеться. true - выключается автоматический
+bool autoOffEnabled = true;
 bool screenAsleep = false;
 
 void updateDisplay() {
@@ -304,7 +306,7 @@ void loop() {
         handleActivity();
       }
     }
-    lastTimeBotRanlon = millis();
+    lastTimeBotRan = millis();
   }
 
   if (autoOffEnabled && !screenAsleep && (millis() - lastActivityTime > autoOffTimeout)) {
