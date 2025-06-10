@@ -67,9 +67,9 @@ void handleActivity() {
   if (screenAsleep) {          // Если экран спит
     M5.Lcd.wakeup();           // Будим экран
     screenAsleep = false;      // Обновляем состояние
-    displayNeedsUpdate = true; // Требуется обновить экран
     Serial.println("Screen woken up");
   }
+  displayNeedsUpdate = true; // Всегда обновляем экран при активности
 }
 
 void setup() {
@@ -133,7 +133,7 @@ void loop() {
   if (M5.BtnA.wasPressed()) {
     autoOffEnabled = !autoOffEnabled; // Переключаем авто-отключение
     Serial.println("Auto-Off: " + String(autoOffEnabled ? "ON" : "OFF"));
-    handleActivity(); // Пробуждаем экран
+    handleActivity(); // Пробуждаем экран и обновляем
   }
 
   // Проверка Wi-Fi
