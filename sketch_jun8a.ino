@@ -55,8 +55,14 @@ void setup() {
   // Инициализация питания
   M5.Power.begin();
   batteryLevel = M5.Power.getBatteryLevel();
-  lastBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
-  isCharging = (lastBatteryVoltage > 4.0); // Начальный порог
+  // Усреднение начального напряжения
+  float tempVoltage = 0.0;
+  for (int i = 0; i < 5; i++) {
+    tempVoltage += M5.Power.getBatteryVoltage() / 1000.0;
+    delay(10);
+  }
+  lastBatteryVoltage = tempVoltage / 5.0;
+  isCharging = (lastBatteryVoltage > 4.2); // Порог 4.2V
   Serial.println("Initial Battery Level: " + String(batteryLevel) + "%");
   Serial.println("Initial Battery Voltage: " + String(lastBatteryVoltage) + "V");
   Serial.println("Initial Is Charging: " + String(isCharging ? "Yes" : "No"));
@@ -111,13 +117,19 @@ void loop() {
   // Проверка батареи каждые 5 секунд
   if (millis() - lastBatteryCheck >= batteryCheckInterval) {
     int newBatteryLevel = M5.Power.getBatteryLevel();
-    float newBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
+    // Усреднение напряжения
+    float tempVoltage = 0.0;
+    for (int i = 0; i < 5; i++) {
+      tempVoltage += M5.Power.getBatteryVoltage() / 1000.0;
+      delay(10);
+    }
+    float newBatteryVoltage = tempVoltage / 5.0;
     bool newIsCharging = isCharging; // Сохраняем текущий статус
-    if (newBatteryVoltage > 4.0) {
-      newIsCharging = true; // Зарядка при >4.0V
-    } else if (newBatteryVoltage < 3.9) {
-      newIsCharging = false; // Нет зарядки при <3.9V
-    } // Между 3.9V и 4.0V статус не меняется
+    if (newBatteryVoltage > 4.2) {
+      newIsCharging = true; // Зарядка при >4.2V
+    } else if (newBatteryVoltage < 4.1) {
+      newIsCharging = false; // Нет зарядки при <4.1V
+    } // Между 4.1V и 4.2V статус не меняется
     Serial.println("Battery Level: " + String(newBatteryLevel) + "%");
     Serial.println("Battery Voltage: " + String(newBatteryVoltage) + "V");
     Serial.println("Is Charging: " + String(newIsCharging ? "Yes" : "No"));
