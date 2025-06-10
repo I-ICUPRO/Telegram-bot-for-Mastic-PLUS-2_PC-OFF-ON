@@ -7,13 +7,12 @@
 // Настройки Wi-Fi и Telegram
 const char* ssid = "Damoind"; // Замените на ваш SSID
 const char* password = "11223344"; // Замените на ваш пароль
-string BOTtoken = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"; // Замените на ваш токен
+String BOTtoken = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"; // Замените на ваш токен
 String CHAT_ID = "123456789"; // Замените на ваш ID чата
 
 // Настройки пина и задержек реле
 int relayPin = 26; // По умолчанию G26, можно сменить на G32 через /setpin
-const unsigned long turnOnDelay = 300;  // Задержка для включения, мс
-const unsigned long turnOffDelay = 300; // Задержка для выключения, мс
+const unsigned long pulseDelay = 300; // Длительность импульса для /pulse, мс
 
 // Настройки батареи и зарядки
 const float chargingHighThreshold = 4.2;
@@ -26,8 +25,7 @@ const unsigned long autoOffTimeout = 10000;
 // Настройка размера шрифта
 const uint8_t fontSize = 2;
 
-// Настройка режима реле
-bool isPulseMode = true; // true = импульсный, false = постоянный
+// Настройка реле
 bool isLowLevelTrigger = true; // true = low-level (LOW = включено)
 
 // Глобальные переменные
@@ -40,7 +38,7 @@ unsigned long lastActivityTime = 0;
 String wifiStatus = "Disconnected";
 String ip = "N/A";
 String lastCommand = "None";
-bool computerOn = false;
+bool computerOn = false; // Состояние реле (для /turn_on, /turn_off)
 bool displayNeedsUpdate = true;
 int batteryLevel = 0;
 bool isCharging = false;
@@ -56,7 +54,6 @@ void updateDisplay() {
   M5.Lcd.println("Wi-Fi: " + wifiStatus);
   M5.Lcd.println("IP: " + ip);
   M5.Lcd.println("Pin: G" + String(relayPin));
-  M5.Lcd.println("Mode: " + String(isPulseMode ? "Pulse" : "Switch"));
   M5.Lcd.println("Trigger: " + String(isLowLevelTrigger ? "Low" : "High"));
   M5.Lcd.println("Last Cmd: " + lastCommand);
   M5.Lcd.println("Relay: " + String(computerOn ? "ON" : "OFF"));
@@ -83,15 +80,15 @@ void setRelayState(bool activate) {
     digitalWrite(relayPin, state);
     Serial.println("Relay set to: ACTIVE, Pin G" + String(relayPin) + ": " + String(state) + ", Voltage: ~" + String(state == HIGH ? "3.3V" : "0V"));
   } else {
-    pinMode(relayPin, INPUT); // Переводим в INPUT для минимизации тока
+    pinMode(relayPin, INPUT); // Минимизируем микротоки
     Serial.println("Relay set to: INACTIVE, Pin G" + String(relayPin) + ": INPUT (floating), Voltage: ~0V");
   }
 }
 
 void setRelayPin(int newPin) {
-  pinMode(relayPin, INPUT); // Отключаем старый пин
+  pinMode(relayPin, INPUT);
   relayPin = newPin;
-  setRelayState(false); // Новый пин в выключенное состояние
+  setRelayState(false);
   Serial.println("Relay pin changed to G" + String(relayPin));
 }
 
@@ -104,7 +101,7 @@ void setup() {
   M5.Lcd.println("Booting...");
   Serial.begin(115200);
   Serial.println("Starting M5StickC+2...");
-  setRelayState(false); // Реле выключено (INPUT)
+  setRelayState(false);
 
   M5.Power.begin();
   batteryLevel = M5.Power.getBatteryLevel();
@@ -190,7 +187,7 @@ void loop() {
     }
     Serial.println("Battery Level: " + String(newBatteryLevel) + "%");
     Serial.println("Battery Voltage: " + String(newBatteryVoltage) + "V");
-    Serial.println("Is Charging: " + String(newIsCharging ? "Yes" : "No"));
+    Serial.println("Is Charging: " + String(newIsCharging) + "Yes");
     Serial.println("Raw isCharging: " + String(M5.Power.isCharging() ? "Yes" : "No"));
     if (newBatteryLevel != batteryLevel || newIsCharging != isCharging) {
       batteryLevel = newBatteryLevel;
@@ -225,10 +222,10 @@ void loop() {
         if (text == "/start") {
           String welcome = "Welcome, " + from_name + ".\n";
           welcome += "Commands:\n";
-          welcome += "/turn_on : Turn on PC\n";
-          welcome += "/turn_off : Turn off PC\n";
+          welcome += "/turn_on : Turn on PC (switch ON)\n";
+          welcome += "/turn_off : Turn off PC (switch OFF)\n";
+          welcome += "/pulse : Send pulse (button)\n";
           welcome += "/status : Check PC status\n";
-          welcome += "/mode : Toggle relay mode (Pulse/Switch)\n";
           welcome += "/trigger : Toggle relay trigger (Low/High)\n";
           welcome += "/setpin : Toggle relay pin (G26/G32)";
           bot.sendMessage(chat_id, welcome, "");
@@ -246,27 +243,17 @@ void loop() {
           setRelayState(computerOn);
           displayNeedsUpdate = true;
           handleActivity();
-        } else if (text == "/mode") {
-          isPulseMode = !isPulseMode;
-          String mode = isPulseMode ? "Pulse" : "Switch";
-          bot.sendMessage(chat_id, "Relay mode set to: " + mode, "");
-          Serial.println("Relay mode set to: " + mode);
-          if (isPulseMode) {
-            setRelayState(false);
-          } else {
-            setRelayState(computerOn);
-          }
+        } else if (text == "/pulse") {
+          setRelayState(true);
+          delay(pulseDelay);
+          setRelayState(false);
+          bot.sendMessage(chat_id, "Pulse sent", "");
+          Serial.println("Pulse sent");
           displayNeedsUpdate = true;
           handleActivity();
         } else if (text == "/turn_on") {
           if (!computerOn) {
-            if (isPulseMode) {
-              setRelayState(true);
-              delay(turnOnDelay);
-              setRelayState(false);
-            } else {
-              setRelayState(true);
-            }
+            setRelayState(true);
             computerOn = true;
             bot.sendMessage(chat_id, "Computer turned on", "");
             Serial.println("Computer turned on");
@@ -274,15 +261,11 @@ void loop() {
             bot.sendMessage(chat_id, "Computer is already ON", "");
             Serial.println("Computer already ON");
           }
+          displayNeedsUpdate = true;
+          handleActivity();
         } else if (text == "/turn_off") {
           if (computerOn) {
-            if (isPulseMode) {
-              setRelayState(true);
-              delay(turnOffDelay);
-              setRelayState(false);
-            } else {
-              setRelayState(false);
-            }
+            setRelayState(false);
             computerOn = false;
             bot.sendMessage(chat_id, "Computer turned off", "");
             Serial.println("Computer turned off");
@@ -290,11 +273,12 @@ void loop() {
             bot.sendMessage(chat_id, "Computer is already OFF", "");
             Serial.println("Computer already OFF");
           }
+          displayNeedsUpdate = true;
+          handleActivity();
         } else if (text == "/status") {
-          String mode = isPulseMode ? "Pulse" : "Switch";
           String trigger = isLowLevelTrigger ? "Low" : "High";
-          bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF") + "\nMode: " + mode + "\nTrigger: " + trigger + "\nPin: G" + String(relayPin), "");
-          Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF") + ", Mode: " + mode + ", Trigger: " + trigger + ", Pin: G" + String(relayPin));
+          bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF") + "\nTrigger: " + trigger + "\nPin: G" + String(relayPin), "");
+          Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF") + ", Trigger: " + trigger + ", Pin: G" + String(relayPin));
         } else {
           bot.sendMessage(chat_id, "Invalid command", "");
           Serial.println("Invalid command: " + text);
