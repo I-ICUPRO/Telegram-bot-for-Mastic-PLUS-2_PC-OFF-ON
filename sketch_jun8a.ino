@@ -4,19 +4,32 @@
 #include <ArduinoJson.h>
 #include <M5StickCPlus2.h>
 
+// Настройки Wi-Fi и Telegram
 const char* ssid = "Damoind"; // Замените на ваш SSID
 const char* password = "11223344"; // Замените на ваш пароль
 String BOTtoken = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"; // Замените на ваш токен
 String CHAT_ID = "123456789"; // Замените на ваш ID чата
 
+// Настройки пина и задержек реле
 int relayPin = 26; // G26 для реле
-WiFiClientSecure client;
-UniversalTelegramBot bot(BOTtoken, client);
-int botRequestDelay = 500; // Интервал проверки сообщений (мс)
-unsigned long lastTimeBotRan = 0;
-unsigned long lastBatteryCheck = 0;
+const unsigned long turnOnDelay = 100;  // Задержка для включения, мс
+const unsigned long turnOffDelay = 5000; // Задержка для выключения, мс
+
+// Настройки батареи и зарядки
+const float chargingHighThreshold = 4.2;  // Верхний порог для зарядки, В
+const float chargingLowThreshold = 4.1;   // Нижний порог для зарядки, В
 const unsigned long batteryCheckInterval = 5000; // Проверка батареи каждые 5 секунд
 
+// Настройки авто-отключения экрана
+const unsigned long autoOffTimeout = 30000; // Время бездействия до выключения экрана, мс (30 секунд)
+
+// Глобальные переменные
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOTtoken, client);
+int botRequestDelay = 500; // Интервал проверки сообщений, мс
+unsigned long lastTimeBotRan = 0;
+unsigned long lastBatteryCheck = 0;
+unsigned long lastActivityTime = 0; // Время последней активности
 String wifiStatus = "Disconnected";
 String ip = "N/A";
 String lastCommand = "None";
@@ -25,11 +38,14 @@ bool displayNeedsUpdate = true;
 int batteryLevel = 0;
 bool isCharging = false;
 float lastBatteryVoltage = 0.0;
+bool autoOffEnabled = false; // Авто-отключение экрана
+bool screenAsleep = false;   // Состояние экрана (спит/не спит)
 
 void updateDisplay() {
+  if (screenAsleep) return; // Не обновляем, если экран спит
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 0);
-  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextSize(1); // Уменьшен шрифт для компактности
   M5.Lcd.println("Wi-Fi: " + wifiStatus);
   M5.Lcd.println("IP: " + ip);
   M5.Lcd.println("Pin: G26");
@@ -37,14 +53,24 @@ void updateDisplay() {
   M5.Lcd.println("Relay: " + String(computerOn ? "ON" : "OFF"));
   M5.Lcd.println("Battery: " + String(batteryLevel) + "%");
   M5.Lcd.println("Charging: " + String(isCharging ? "Yes" : "No"));
+  M5.Lcd.println("Auto-Off: " + String(autoOffEnabled ? "ON" : "OFF"));
   displayNeedsUpdate = false;
+}
+
+void handleActivity() {
+  lastActivityTime = millis(); // Обновляем время активности
+  if (screenAsleep) {          // Если экран спит
+    M5.Lcd.wakeup();           // Будим экран
+    screenAsleep = false;      // Обновляем состояние
+    displayNeedsUpdate = true; // Требуется обновить экран
+  }
 }
 
 void setup() {
   M5.begin();
   M5.Lcd.setRotation(3); // Настройте ориентацию (0-3)
   M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextSize(1);
   M5.Lcd.setCursor(0, 0);
   M5.Lcd.println("Booting...");
   Serial.begin(115200);
@@ -62,7 +88,7 @@ void setup() {
     delay(10);
   }
   lastBatteryVoltage = tempVoltage / 5.0;
-  isCharging = (lastBatteryVoltage > 4.2); // Порог 4.2V
+  isCharging = (lastBatteryVoltage > chargingHighThreshold);
   Serial.println("Initial Battery Level: " + String(batteryLevel) + "%");
   Serial.println("Initial Battery Voltage: " + String(lastBatteryVoltage) + "V");
   Serial.println("Initial Is Charging: " + String(isCharging ? "Yes" : "No"));
@@ -89,11 +115,21 @@ void setup() {
     ip = "N/A";
     Serial.println("WiFi connection failed.");
   }
+  lastActivityTime = millis(); // Инициализация времени активности
   displayNeedsUpdate = true;
   updateDisplay();
 }
 
 void loop() {
+  M5.update(); // Обновляем состояние кнопок
+
+  // Обработка нажатия центральной кнопки (BtnA)
+  if (M5.BtnA.wasPressed()) {
+    autoOffEnabled = !autoOffEnabled; // Переключаем авто-отключение
+    Serial.println("Auto-Off: " + String(autoOffEnabled ? "ON" : "OFF"));
+    handleActivity(); // Обновляем активность
+  }
+
   // Проверка Wi-Fi
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiStatus != "Disconnected") {
@@ -102,6 +138,7 @@ void loop() {
       bot.sendMessage(CHAT_ID, "Wi-Fi disconnected!", "");
       Serial.println("WiFi disconnected, reconnecting...");
       displayNeedsUpdate = true;
+      handleActivity();
     }
     WiFi.reconnect();
     delay(5000);
@@ -112,9 +149,10 @@ void loop() {
     bot.sendMessage(CHAT_ID, "Wi-Fi reconnected, IP: " + ip, "");
     Serial.println("WiFi reconnected. IP: " + ip);
     displayNeedsUpdate = true;
+    handleActivity();
   }
 
-  // Проверка батареи каждые 5 секунд
+  // Проверка батареи
   if (millis() - lastBatteryCheck >= batteryCheckInterval) {
     int newBatteryLevel = M5.Power.getBatteryLevel();
     // Усреднение напряжения
@@ -124,12 +162,12 @@ void loop() {
       delay(10);
     }
     float newBatteryVoltage = tempVoltage / 5.0;
-    bool newIsCharging = isCharging; // Сохраняем текущий статус
-    if (newBatteryVoltage > 4.2) {
-      newIsCharging = true; // Зарядка при >4.2V
-    } else if (newBatteryVoltage < 4.1) {
-      newIsCharging = false; // Нет зарядки при <4.1V
-    } // Между 4.1V и 4.2V статус не меняется
+    bool newIsCharging = isCharging;
+    if (newBatteryVoltage > chargingHighThreshold) {
+      newIsCharging = true;
+    } else if (newBatteryVoltage < chargingLowThreshold) {
+      newIsCharging = false;
+    }
     Serial.println("Battery Level: " + String(newBatteryLevel) + "%");
     Serial.println("Battery Voltage: " + String(newBatteryVoltage) + "V");
     Serial.println("Is Charging: " + String(newIsCharging ? "Yes" : "No"));
@@ -139,6 +177,7 @@ void loop() {
       isCharging = newIsCharging;
       lastBatteryVoltage = newBatteryVoltage;
       displayNeedsUpdate = true;
+      handleActivity();
     }
     lastBatteryCheck = millis();
   }
@@ -154,8 +193,9 @@ void loop() {
           M5.Lcd.clear();
           M5.Lcd.println("Unauthorized");
           Serial.println("Unauthorized user: " + chat_id);
-          delay(2000); // Показать на 2 секунды
+          delay(2000);
           displayNeedsUpdate = true;
+          handleActivity();
           continue;
         }
         String text = bot.messages[i].text;
@@ -173,7 +213,7 @@ void loop() {
         } else if (text == "/turn_on") {
           if (!computerOn) {
             digitalWrite(relayPin, HIGH);
-            delay(100); // Короткий импульс 100 мс
+            delay(turnOnDelay);
             digitalWrite(relayPin, LOW);
             computerOn = true;
             bot.sendMessage(chat_id, "Computer turned on", "");
@@ -185,7 +225,7 @@ void loop() {
         } else if (text == "/turn_off") {
           if (computerOn) {
             digitalWrite(relayPin, HIGH);
-            delay(5000); // Длинный импульс 5 секунд
+            delay(turnOffDelay);
             digitalWrite(relayPin, LOW);
             computerOn = false;
             bot.sendMessage(chat_id, "Computer turned off", "");
@@ -202,9 +242,17 @@ void loop() {
           Serial.println("Invalid command: " + text);
         }
         displayNeedsUpdate = true;
+        handleActivity();
       }
     }
     lastTimeBotRan = millis();
+  }
+
+  // Авто-отключение экрана
+  if (autoOffEnabled && !screenAsleep && (millis() - lastActivityTime > autoOffTimeout)) {
+    M5.Lcd.sleep();
+    screenAsleep = true;
+    Serial.println("Screen asleep");
   }
 
   if (displayNeedsUpdate) {
