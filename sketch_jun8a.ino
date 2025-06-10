@@ -21,7 +21,10 @@ const float chargingLowThreshold = 4.1;   // Нижний порог для за
 const unsigned long batteryCheckInterval = 5000; // Проверка батареи каждые 5 секунд
 
 // Настройки авто-отключения экрана
-const unsigned long autoOffTimeout = 30000; // Время бездействия до выключения экрана, мс (30 секунд)
+const unsigned long autoOffTimeout = 10000; // Время бездействия до выключения экрана, мс (10 секунд)
+
+// Настройка размера шрифта
+const uint8_t fontSize = 2; // Размер шрифта (1 = мелкий, 2 = средний, 3 = крупный)
 
 // Глобальные переменные
 WiFiClientSecure client;
@@ -45,7 +48,7 @@ void updateDisplay() {
   if (screenAsleep) return; // Не обновляем, если экран спит
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 0);
-  M5.Lcd.setTextSize(1); // Уменьшен шрифт для компактности
+  M5.Lcd.setTextSize(fontSize);
   M5.Lcd.println("Wi-Fi: " + wifiStatus);
   M5.Lcd.println("IP: " + ip);
   M5.Lcd.println("Pin: G26");
@@ -54,6 +57,8 @@ void updateDisplay() {
   M5.Lcd.println("Battery: " + String(batteryLevel) + "%");
   M5.Lcd.println("Charging: " + String(isCharging ? "Yes" : "No"));
   M5.Lcd.println("Auto-Off: " + String(autoOffEnabled ? "ON" : "OFF"));
+  // Если текст не помещается, закомментируйте строки, например:
+  // M5.Lcd.println("IP: " + ip);
   displayNeedsUpdate = false;
 }
 
@@ -63,6 +68,7 @@ void handleActivity() {
     M5.Lcd.wakeup();           // Будим экран
     screenAsleep = false;      // Обновляем состояние
     displayNeedsUpdate = true; // Требуется обновить экран
+    Serial.println("Screen woken up");
   }
 }
 
@@ -70,7 +76,7 @@ void setup() {
   M5.begin();
   M5.Lcd.setRotation(3); // Настройте ориентацию (0-3)
   M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextSize(fontSize);
   M5.Lcd.setCursor(0, 0);
   M5.Lcd.println("Booting...");
   Serial.begin(115200);
@@ -127,7 +133,7 @@ void loop() {
   if (M5.BtnA.wasPressed()) {
     autoOffEnabled = !autoOffEnabled; // Переключаем авто-отключение
     Serial.println("Auto-Off: " + String(autoOffEnabled ? "ON" : "OFF"));
-    handleActivity(); // Обновляем активность
+    handleActivity(); // Пробуждаем экран
   }
 
   // Проверка Wi-Fi
@@ -138,7 +144,7 @@ void loop() {
       bot.sendMessage(CHAT_ID, "Wi-Fi disconnected!", "");
       Serial.println("WiFi disconnected, reconnecting...");
       displayNeedsUpdate = true;
-      handleActivity();
+      // Не вызываем handleActivity(), чтобы не включать экран
     }
     WiFi.reconnect();
     delay(5000);
@@ -149,7 +155,7 @@ void loop() {
     bot.sendMessage(CHAT_ID, "Wi-Fi reconnected, IP: " + ip, "");
     Serial.println("WiFi reconnected. IP: " + ip);
     displayNeedsUpdate = true;
-    handleActivity();
+    // Не вызываем handleActivity(), чтобы не включать экран
   }
 
   // Проверка батареи
@@ -177,7 +183,7 @@ void loop() {
       isCharging = newIsCharging;
       lastBatteryVoltage = newBatteryVoltage;
       displayNeedsUpdate = true;
-      handleActivity();
+      // Не вызываем handleActivity(), чтобы не включать экран
     }
     lastBatteryCheck = millis();
   }
@@ -191,11 +197,12 @@ void loop() {
         if (chat_id != CHAT_ID) {
           bot.sendMessage(chat_id, "Unauthorized user", "");
           M5.Lcd.clear();
+          M5.Lcd.setTextSize(fontSize);
           M5.Lcd.println("Unauthorized");
           Serial.println("Unauthorized user: " + chat_id);
           delay(2000);
           displayNeedsUpdate = true;
-          handleActivity();
+          handleActivity(); // Пробуждаем экран для неавторизованного пользователя
           continue;
         }
         String text = bot.messages[i].text;
@@ -242,7 +249,7 @@ void loop() {
           Serial.println("Invalid command: " + text);
         }
         displayNeedsUpdate = true;
-        handleActivity();
+        handleActivity(); // Пробуждаем экран для команды
       }
     }
     lastTimeBotRan = millis();
