@@ -20,7 +20,7 @@ const unsigned long batteryCheckInterval = 5000; // Проверка батар�
 String wifiStatus = "Disconnected";
 String ip = "N/A";
 String lastCommand = "None";
-bool computerOn = false; // Состояние моторчика/компьютера
+bool computerOn = false; // Состояние компьютера
 bool displayNeedsUpdate = true;
 int batteryLevel = 0;
 bool isCharging = false;
@@ -56,7 +56,7 @@ void setup() {
   M5.Power.begin();
   batteryLevel = M5.Power.getBatteryLevel();
   lastBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
-  isCharging = (lastBatteryVoltage > 4.0); // Порог понижен до 4.0V
+  isCharging = (lastBatteryVoltage > 4.0); // Порог 4.0V
   Serial.println("Initial Battery Level: " + String(batteryLevel) + "%");
   Serial.println("Initial Battery Voltage: " + String(lastBatteryVoltage) + "V");
   Serial.println("Initial Is Charging: " + String(isCharging ? "Yes" : "No"));
@@ -113,7 +113,6 @@ void loop() {
     int newBatteryLevel = M5.Power.getBatteryLevel();
     float newBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
     bool newIsCharging = (newBatteryVoltage > 4.0); // Порог 4.0V
-    // Если напряжение упало, зарядка маловероятна
     if (newBatteryVoltage < lastBatteryVoltage && newIsCharging) {
       newIsCharging = false;
     }
@@ -146,38 +145,44 @@ void loop() {
           continue;
         }
         String text = bot.messages[i].text;
+        String from_name = bot.messages[i].from_name;
+        if (from_name == "") from_name = "Guest";
         lastCommand = text;
-        Serial.println("Command: " + text);
+        Serial.println("Command: " + text + " from " + from_name);
         if (text == "/start") {
-          String welcome = "Welcome, " + String(bot.messages[i].from_name) + ".\n";
+          String welcome = "Welcome, " + from_name + ".\n";
           welcome += "Commands:\n";
-          welcome += "/turn_on : Turn on motor\n";
-          welcome += "/turn_off : Turn off motor\n";
-          welcome += "/status : Check motor status";
+          welcome += "/turn_on : Turn on PC\n";
+          welcome += "/turn_off : Turn off PC\n";
+          welcome += "/status : Check PC status";
           bot.sendMessage(chat_id, welcome, "");
         } else if (text == "/turn_on") {
           if (!computerOn) {
-            digitalWrite(relayPin, HIGH); // Включить реле (держать HIGH)
+            digitalWrite(relayPin, HIGH);
+            delay(100); // Короткий импульс 100 мс
+            digitalWrite(relayPin, LOW);
             computerOn = true;
-            bot.sendMessage(chat_id, "Motor turned on", "");
-            Serial.println("Motor turned on");
+            bot.sendMessage(chat_id, "Computer turned on", "");
+            Serial.println("Computer turned on");
           } else {
-            bot.sendMessage(chat_id, "Motor is already ON", "");
-            Serial.println("Motor already ON");
+            bot.sendMessage(chat_id, "Computer is already ON", "");
+            Serial.println("Computer already ON");
           }
         } else if (text == "/turn_off") {
           if (computerOn) {
-            digitalWrite(relayPin, LOW); // Выключить реле
+            digitalWrite(relayPin, HIGH);
+            delay(5000); // Длинный импульс 5 секунд
+            digitalWrite(relayPin, LOW);
             computerOn = false;
-            bot.sendMessage(chat_id, "Motor turned off", "");
-            Serial.println("Motor turned off");
+            bot.sendMessage(chat_id, "Computer turned off", "");
+            Serial.println("Computer turned off");
           } else {
-            bot.sendMessage(chat_id, "Motor is already OFF", "");
-            Serial.println("Motor already OFF");
+            bot.sendMessage(chat_id, "Computer is already OFF", "");
+            Serial.println("Computer already OFF");
           }
         } else if (text == "/status") {
-          bot.sendMessage(chat_id, "Motor is " + String(computerOn ? "ON" : "OFF"), "");
-          Serial.println("Status: Motor is " + String(computerOn ? "ON" : "OFF"));
+          bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF"), "");
+          Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF"));
         } else {
           bot.sendMessage(chat_id, "Invalid command", "");
           Serial.println("Invalid command: " + text);
