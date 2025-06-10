@@ -52,17 +52,15 @@ void setup() {
   pinMode(relayPin, OUTPUT);
   digitalWrite(relayPin, LOW);
 
-  // Инициализация и сброс питания
+  // Инициализация питания
   M5.Power.begin();
-  M5.Power.setPowerVin(false); // Отключить входное питание программно
-  delay(100);
-  M5.Power.setPowerVin(true); // Включить обратно
   batteryLevel = M5.Power.getBatteryLevel();
   lastBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
-  isCharging = (lastBatteryVoltage > 4.1); // Порог понижен до 4.1V
+  isCharging = (lastBatteryVoltage > 4.0); // Порог понижен до 4.0V
   Serial.println("Initial Battery Level: " + String(batteryLevel) + "%");
   Serial.println("Initial Battery Voltage: " + String(lastBatteryVoltage) + "V");
   Serial.println("Initial Is Charging: " + String(isCharging ? "Yes" : "No"));
+  Serial.println("Raw isCharging: " + String(M5.Power.isCharging() ? "Yes" : "No"));
 
   client.setInsecure(); // Временно для тестирования
   M5.Lcd.println("Wi-Fi...");
@@ -114,8 +112,8 @@ void loop() {
   if (millis() - lastBatteryCheck >= batteryCheckInterval) {
     int newBatteryLevel = M5.Power.getBatteryLevel();
     float newBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
-    bool newIsCharging = (newBatteryVoltage > 4.1); // Порог 4.1V
-    // Дополнительная проверка: если напряжение упало, зарядка маловероятна
+    bool newIsCharging = (newBatteryVoltage > 4.0); // Порог 4.0V
+    // Если напряжение упало, зарядка маловероятна
     if (newBatteryVoltage < lastBatteryVoltage && newIsCharging) {
       newIsCharging = false;
     }
