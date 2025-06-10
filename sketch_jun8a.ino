@@ -15,12 +15,12 @@ UniversalTelegramBot bot(BOTtoken, client);
 int botRequestDelay = 500; // Интервал проверки сообщений (мс)
 unsigned long lastTimeBotRan = 0;
 unsigned long lastBatteryCheck = 0;
-const unsigned long batteryUpdateInterval = 5000; // Обновлять батарею каждые 5 секунд
+const unsigned long batteryCheckInterval = 5000; // Проверка батареи каждые 5 секунд
 
 String wifiStatus = "Disconnected";
 String ip = "N/A";
 String lastCommand = "None";
-bool computerOn = false; // Состояние моторчика (true = включён, false = выключен)
+bool computerOn = false; // Состояние моторчика/компьютера
 bool displayNeedsUpdate = true;
 int batteryLevel = 0;
 bool isCharging = false;
@@ -103,7 +103,7 @@ void loop() {
   }
 
   // Проверка батареи каждые 5 секунд
-  if (millis() - lastBatteryCheck > batteryUpdateInterval) {
+  if (millis() - lastBatteryCheck >= batteryCheckInterval) {
     int newBatteryLevel = M5.Power.getBatteryLevel();
     bool newIsCharging = M5.Power.isCharging();
     if (newBatteryLevel != batteryLevel || newIsCharging != isCharging) {
@@ -124,7 +124,7 @@ void loop() {
           bot.sendMessage(chat_id, "Unauthorized user", "");
           M5.Lcd.clear();
           M5.Lcd.println("Unauthorized");
-          Serial.println("Unauthorized user: " + chat_id);
+          Serial.println("Unauthorized user: " + chatイド);
           delay(2000); // Показать на 2 секунды
           displayNeedsUpdate = true;
           continue;
