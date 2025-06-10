@@ -11,7 +11,7 @@ String BOTtoken = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"; // Заме
 String CHAT_ID = "123456789"; // Замените на ваш ID чата
 
 // Настройки пина и задержек реле
-int relayPin = 26; // G26 для реле
+int relayPin = 26; // По умолчанию G26, можно сменить на G32 через /setpin
 const unsigned long turnOnDelay = 300;  // Задержка для включения в импульсном режиме, мс
 const unsigned long turnOffDelay = 300; // Задержка для выключения в импульсном режиме, мс
 
@@ -55,7 +55,7 @@ void updateDisplay() {
   M5.Lcd.setTextSize(fontSize);
   M5.Lcd.println("Wi-Fi: " + wifiStatus);
   M5.Lcd.println("IP: " + ip);
-  M5.Lcd.println("Pin: G26");
+  M5.Lcd.println("Pin: G" + String(relayPin));
   M5.Lcd.println("Mode: " + String(isPulseMode ? "Pulse" : "Switch"));
   M5.Lcd.println("Trigger: " + String(isLowLevelTrigger ? "Low" : "High"));
   M5.Lcd.println("Last Cmd: " + lastCommand);
@@ -80,12 +80,20 @@ void handleActivity() {
 
 void setRelayState(bool activate) {
   // Устанавливаем состояние реле с учётом типа триггера
-  if (isLowLevelTrigger) {
-    digitalWrite(relayPin, activate ? LOW : HIGH); // LOW = включено, HIGH = выключено
-  } else {
-    digitalWrite(relayPin, activate ? HIGH : LOW); // HIGH = включено, LOW = выключено
-  }
-  Serial.println("Relay set to: " + String(activate ? "ACTIVE" : "INACTIVE") + ", Pin G26: " + String(digitalRead(relayPin)));
+  int state = isLowLevelTrigger ? (activate ? LOW : HIGH) : (activate ? HIGH : LOW);
+  digitalWrite(relayPin, state);
+  Serial.println("Relay set to: " + String(activate ? "ACTIVE" : "INACTIVE") + ", Pin G" + String(relayPin) + ": " + String(state) + ", Voltage: ~" + String(state == HIGH ? "3.3V" : "0V"));
+}
+
+void setRelayPin(int newPin) {
+  // Отключаем старый пин
+  digitalWrite(relayPin, isLowLevelTrigger ? HIGH : LOW); // Выключаем реле
+  pinMode(relayPin, INPUT); // Сбрасываем старый пин
+  // Настраиваем новый пин
+  relayPin = newPin;
+  pinMode(relayPin, OUTPUT);
+  setRelayState(false); // Устанавливаем реле в выключенное состояние
+  Serial.println("Relay pin changed to G" + String(relayPin));
 }
 
 void setup() {
@@ -98,7 +106,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Starting M5StickC+2...");
   pinMode(relayPin, OUTPUT);
-  setRelayState(false); // Реле выключено по умолчанию (HIGH для low-level, LOW для high-level)
+  setRelayState(false); // Реле выключено по умолчанию (HIGH для low-level)
 
   // Инициализация питания
   M5.Power.begin();
@@ -233,25 +241,30 @@ void loop() {
           welcome += "/turn_off : Turn off PC\n";
           welcome += "/status : Check PC status\n";
           welcome += "/mode : Toggle relay mode (Pulse/Switch)\n";
-          welcome += "/trigger : Toggle relay trigger (Low/High)";
+          welcome += "/trigger : Toggle relay trigger (Low/High)\n";
+          welcome += "/setpin : Toggle relay pin (G26/G32)";
           bot.sendMessage(chat_id, welcome, "");
+        } else if (text == "/setpin") {
+          int newPin = (relayPin == 26) ? 32 : 26; // Переключаем между G26 и G32
+          setRelayPin(newPin);
+          bot.sendMessage(chat_id, "Relay pin set to: G" + String(relayPin), "");
+          displayNeedsUpdate = true;
+          handleActivity(); // Пробуждаем экран
         } else if (text == "/trigger") {
           isLowLevelTrigger = !isLowLevelTrigger; // Переключаем тип триггера
           String trigger = isLowLevelTrigger ? "Low" : "High";
           bot.sendMessage(chat_id, "Relay trigger set to: " + trigger, "");
           Serial.println("Relay trigger set to: " + trigger);
-          // Применяем новое состояние
           setRelayState(computerOn); // Обновляем состояние реле
           displayNeedsUpdate = true;
           handleActivity(); // Пробуждаем экран
-        } else if (text Perpetual_trigger()) {
+        } else if (text == "/mode") {
           isPulseMode = !isPulseMode; // Переключаем режим
           String mode = isPulseMode ? "Pulse" : "Switch";
           bot.sendMessage(chat_id, "Relay mode set to: " + mode, "");
           Serial.println("Relay mode set to: " + mode);
-          // Если переключаем в импульсный режим, выключаем реле
           if (isPulseMode) {
-            setRelayState(false);
+            setRelayState(false); // Выключаем реле в импульсном режиме
           } else {
             setRelayState(computerOn); // Восстанавливаем текущее состояние
           }
@@ -292,8 +305,8 @@ void loop() {
         } else if (text == "/status") {
           String mode = isPulseMode ? "Pulse" : "Switch";
           String trigger = isLowLevelTrigger ? "Low" : "High";
-          bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF") + "\nMode: " + mode + "\nTrigger: " + trigger, "");
-          Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF") + ", Mode: " + mode + ", Trigger: " + trigger);
+          bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF") + "\nMode: " + mode + "\nTrigger: " + trigger + "\nPin: G" + String(relayPin), "");
+          Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF") + ", Mode: " + mode + ", Trigger: " + trigger + ", Pin: G" + String(relayPin));
         } else {
           bot.sendMessage(chat_id, "Invalid command", "");
           Serial.println("Invalid command: " + text);
