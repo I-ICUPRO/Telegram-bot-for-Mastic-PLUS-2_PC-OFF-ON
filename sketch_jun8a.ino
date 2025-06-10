@@ -24,6 +24,7 @@ bool computerOn = false; // Состояние моторчика/компьют
 bool displayNeedsUpdate = true;
 int batteryLevel = 0;
 bool isCharging = false;
+float lastBatteryVoltage = 0.0;
 
 void updateDisplay() {
   M5.Lcd.fillScreen(BLACK);
@@ -51,10 +52,17 @@ void setup() {
   pinMode(relayPin, OUTPUT);
   digitalWrite(relayPin, LOW);
 
-  // Инициализация питания
+  // Инициализация и сброс питания
   M5.Power.begin();
+  M5.Power.setPowerVin(false); // Отключить входное питание программно
+  delay(100);
+  M5.Power.setPowerVin(true); // Включить обратно
   batteryLevel = M5.Power.getBatteryLevel();
-  isCharging = M5.Power.isCharging();
+  lastBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
+  isCharging = (lastBatteryVoltage > 4.1); // Порог понижен до 4.1V
+  Serial.println("Initial Battery Level: " + String(batteryLevel) + "%");
+  Serial.println("Initial Battery Voltage: " + String(lastBatteryVoltage) + "V");
+  Serial.println("Initial Is Charging: " + String(isCharging ? "Yes" : "No"));
 
   client.setInsecure(); // Временно для тестирования
   M5.Lcd.println("Wi-Fi...");
@@ -105,10 +113,20 @@ void loop() {
   // Проверка батареи каждые 5 секунд
   if (millis() - lastBatteryCheck >= batteryCheckInterval) {
     int newBatteryLevel = M5.Power.getBatteryLevel();
-    bool newIsCharging = M5.Power.isCharging();
+    float newBatteryVoltage = M5.Power.getBatteryVoltage() / 1000.0;
+    bool newIsCharging = (newBatteryVoltage > 4.1); // Порог 4.1V
+    // Дополнительная проверка: если напряжение упало, зарядка маловероятна
+    if (newBatteryVoltage < lastBatteryVoltage && newIsCharging) {
+      newIsCharging = false;
+    }
+    Serial.println("Battery Level: " + String(newBatteryLevel) + "%");
+    Serial.println("Battery Voltage: " + String(newBatteryVoltage) + "V");
+    Serial.println("Is Charging: " + String(newIsCharging ? "Yes" : "No"));
+    Serial.println("Raw isCharging: " + String(M5.Power.isCharging() ? "Yes" : "No"));
     if (newBatteryLevel != batteryLevel || newIsCharging != isCharging) {
       batteryLevel = newBatteryLevel;
       isCharging = newIsCharging;
+      lastBatteryVoltage = newBatteryVoltage;
       displayNeedsUpdate = true;
     }
     lastBatteryCheck = millis();
@@ -124,7 +142,7 @@ void loop() {
           bot.sendMessage(chat_id, "Unauthorized user", "");
           M5.Lcd.clear();
           M5.Lcd.println("Unauthorized");
-          Serial.println("Unauthorized user: " + chatイド);
+          Serial.println("Unauthorized user: " + chat_id);
           delay(2000); // Показать на 2 секунды
           displayNeedsUpdate = true;
           continue;
