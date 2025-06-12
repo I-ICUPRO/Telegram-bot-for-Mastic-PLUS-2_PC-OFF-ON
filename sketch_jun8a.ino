@@ -3,6 +3,8 @@
 #include <UniversalTelegramBot.h>
 #include <ArduinoJson.h>
 #include <M5StickCPlus2.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 
 // Настройки Wi-Fi и Telegram
 const char* ssid = "Damoind"; // Замените на ваш SSID
@@ -10,7 +12,7 @@ const char* password = "11223344"; // Замените на ваш пароль
 String BOTtoken = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"; // Замените на ваш токен
 String CHAT_ID = "123456789"; // Замените на ваш ID чата
 
-// Настройки пина и задержек реле
+// Настройки пина и задержки реле
 int relayPin = 26; // По умолчанию G26, можно сменить на G32 через /setpin
 const unsigned long pulseDelay = 300; // Длительность импульса для /pulse, мс
 
@@ -23,14 +25,14 @@ const unsigned long batteryCheckInterval = 5000;
 const unsigned long autoOffTimeout = 10000;
 
 // Настройка размера шрифта
-const float fontSize = 1.7;
+const float fontSize = 1.5;
 
 // Настройка реле
 bool isLowLevelTrigger = true; // true = low-level (LOW = включено)
 
 // Глобальные переменные
 WiFiClientSecure client;
-UniversalTelegramBot bot(BOTtoken, client);
+UniversalTelegramBot bot(BOT_TOKEN, client);
 int botRequestDelay = 500;
 unsigned long lastTimeBotRan = 0;
 unsigned long lastBatteryCheck = 0;
@@ -43,10 +45,31 @@ bool displayNeedsUpdate = true;
 int batteryLevel = 0;
 bool isCharging = false;
 float lastBatteryVoltage = 0.0;
-
-//авто-выключение экрана. false - не выключаеться. true - выключается автоматический
 bool autoOffEnabled = true;
 bool screenAsleep = false;
+unsigned long bootTime = 0; // Время включения устройства
+
+// NTP Client для синхронизации времени (Самара, UTC+4)
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 14400, 60000); // UTC+4, обновление каждые 60 сек
+
+// Структура для расписаний
+struct Schedule {
+  int hour;
+  int minute;
+  String command;
+};
+Schedule schedules[10]; // До 10 расписаний
+int scheduleCount = 0;
+
+// Структура для таймеров
+struct Timer {
+  unsigned long startTime;
+  unsigned long delay;
+  String command;
+};
+Timer timers[10]; // До 10 таймеров
+int timerCount = 0;
 
 void updateDisplay() {
   if (screenAsleep) return;
@@ -62,6 +85,7 @@ void updateDisplay() {
   M5.Lcd.println("Battery: " + String(batteryLevel) + "%");
   M5.Lcd.println("Charging: " + String(isCharging ? "Yes" : "No"));
   M5.Lcd.println("Auto-Off: " + String(autoOffEnabled ? "ON" : "OFF"));
+  M5.Lcd.println("Time: " + String(timeClient.getFormattedTime()));
   displayNeedsUpdate = false;
 }
 
@@ -80,30 +104,40 @@ void setRelayState(bool activate) {
     pinMode(relayPin, OUTPUT);
     int state = isLowLevelTrigger ? LOW : HIGH;
     digitalWrite(relayPin, state);
-    Serial.println("Relay set to: ACTIVE, Pin G" + String(relayPin) + ": " + String(state) + ", Voltage: ~" + String(state == HIGH ? "3.3V" : "0V"));
+    Serial.println("Relay set to: ACTIVE, Pin G" + String(relayPin) + ": " + String(state) + ", Voltage: ~" + (state == HIGH ? "3.00" : "0.00"));
   } else {
     pinMode(relayPin, INPUT); // Минимизируем микротоки
-    Serial.println("Relay set to: INACTIVE, Pin G" + String(relayPin) + ": INPUT (floating), Voltage: ~0V");
+    Serial.println("Relay set to: OFF, Pin " + String(relayPin) + ": INPUT");
   }
 }
 
 void setRelayPin(int newPin) {
   pinMode(relayPin, INPUT);
+  // Сохраняем текущее состояние реле
+  bool wasActive = computerOn;
   relayPin = newPin;
-  setRelayState(false);
+  // Восстанавливаем состояние реле на новом пине
+  setRelayState(wasActive);
   Serial.println("Relay pin changed to G" + String(relayPin));
 }
 
 void showCommands(String chat_id, String from_name) {
-  String welcome = "Welcome, " + from_name + ".\n";
-  welcome += "Commands:\n";
+  String welcome = "Welcome, " + from_name + " to M5Stick.\n\n";
+  welcome += "Commands:\n\n";
+  welcome += "/start or /c : Show commands\n\n";
   welcome += "/turn_on : Turn on PC (switch ON)\n";
   welcome += "/turn_off : Turn off PC (switch OFF)\n";
-  welcome += "/pulse : Send pulse (button)\n";
+  welcome += "/pulse : Send pulse (button)\n\n";
   welcome += "/status or /s : Check PC status\n";
   welcome += "/trigger : Toggle relay trigger (Low/High)\n";
-  welcome += "/setpin : Toggle relay pin (G26/G32)\n";
-  welcome += "/start or /c : Show commands";
+  welcome += "/setpin : Toggle relay pin (G26/G32)\n\n";
+  welcome += "/schedule <HH:MM> <command> : Set daily schedule.\n";
+  welcome += "/remove_schedule <HH:MM> : Remove schedule.\n";
+  welcome += "/list_schedules : List all schedules\n\n";
+  welcome += "/timer <HH:MM> <command> : Set timer.\n";
+  welcome += "/remove_timer <index> : Remove timer by index.\n";
+  welcome += "/list_timers : List all timers\n\n";
+  welcome += "/shutdown : Shutdown the stick";
   bot.sendMessage(chat_id, welcome, "");
 }
 
@@ -111,6 +145,46 @@ void showStatus(String chat_id) {
   String trigger = isLowLevelTrigger ? "Low" : "High";
   bot.sendMessage(chat_id, "Computer is " + String(computerOn ? "ON" : "OFF") + "\nTrigger: " + trigger + "\nPin: G" + String(relayPin), "");
   Serial.println("Status: Computer is " + String(computerOn ? "ON" : "OFF") + ", Trigger: " + trigger + ", Pin: G" + String(relayPin));
+}
+
+void executeCommand(String command) {
+  if (command == "pulse") {
+    if (computerOn) {
+      bot.sendMessage(CHAT_ID, "Cannot send pulse while ON", "");
+      Serial.println("Cannot send pulse while ON");
+    } else {
+      setRelayState(true);
+      delay(pulseDelay);
+      setRelayState(false);
+      bot.sendMessage(CHAT_ID, "Pulse sent", "");
+      Serial.println("Pulse sent");
+    }
+  } else if (command == "turn_on") {
+    if (!computerOn) {
+      setRelayState(true);
+      computerOn = true;
+      bot.sendMessage(CHAT_ID, "SET ON", "");
+      Serial.println("SET ON");
+    }
+  } else if (command == "turn_off") {
+    if (computerOn) {
+      setRelayState(false);
+      computerOn = false;
+      bot.sendMessage(CHAT_ID, "SET OFF", "");
+      Serial.println("SET OFF");
+    }
+  }
+}
+
+void clearOldMessages() {
+  // Получаем все сообщения, чтобы очистить очередь
+  int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+  while (numNewMessages > 0) {
+    for (int i = 0; i < numNewMessages; i++) {
+      Serial.println("Cleared old message: " + String(bot.messages[i].text));
+    }
+    numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+  }
 }
 
 void setup() {
@@ -121,7 +195,7 @@ void setup() {
   M5.Lcd.setCursor(0, 0);
   M5.Lcd.println("Booting...");
   Serial.begin(115200);
-  Serial.println("Starting M5StickC+2...");
+  Serial.println("Starting M5StickC Plus 2...");
   setRelayState(false);
 
   M5.Power.begin();
@@ -135,7 +209,7 @@ void setup() {
   isCharging = (lastBatteryVoltage > chargingHighThreshold);
   Serial.println("Initial Battery Level: " + String(batteryLevel) + "%");
   Serial.println("Initial Battery Voltage: " + String(lastBatteryVoltage) + "V");
-  Serial.println("Initial Is Charging: " + String(isCharging ? "Yes" : "No"));
+  Serial.println("Is Charging: " + String(isCharging ? "Yes" : "No"));
   Serial.println("Raw isCharging: " + String(M5.Power.isCharging() ? "Yes" : "No"));
 
   client.setInsecure();
@@ -152,8 +226,24 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     wifiStatus = "Connected";
     ip = WiFi.localIP().toString();
-    bot.sendMessage(CHAT_ID, "Bot started", "");
     Serial.println("WiFi connected. IP: " + ip);
+    timeClient.begin();
+    // Ожидаем успешной синхронизации NTP
+    int ntpAttempts = 0;
+    while (!timeClient.update() && ntpAttempts < 5) {
+      Serial.println("NTP sync attempt " + String(ntpAttempts + 1));
+      delay(500);
+      ntpAttempts++;
+    }
+    if (timeClient.isTimeSet()) {
+      bootTime = timeClient.getEpochTime();
+      Serial.println("NTP synced. BootTime: " + String(bootTime));
+    } else {
+      bootTime = millis() / 1000; // Fallback на локальное время
+      Serial.println("NTP sync failed. Using millis: " + String(bootTime));
+    }
+    clearOldMessages(); // Очищаем старые сообщения
+    bot.sendMessage(CHAT_ID, "Bot started", "");
   } else {
     wifiStatus = "Disconnected";
     ip = "N/A";
@@ -162,6 +252,21 @@ void setup() {
   lastActivityTime = millis();
   displayNeedsUpdate = true;
   updateDisplay();
+}
+
+void insertSortedSchedule(int hour, int minute, String command) {
+  int insertPos = scheduleCount;
+  for (int i = 0; i < scheduleCount; i++) {
+    if (schedules[i].hour > hour || (schedules[i].hour == hour && schedules[i].minute > minute)) {
+      insertPos = i;
+      break;
+    }
+  }
+  for (int i = scheduleCount; i > insertPos; i--) {
+    schedules[i] = schedules[i - 1];
+  }
+  schedules[insertPos] = {hour, minute, command};
+  scheduleCount++;
 }
 
 void loop() {
@@ -189,6 +294,22 @@ void loop() {
     ip = WiFi.localIP().toString();
     bot.sendMessage(CHAT_ID, "Wi-Fi reconnected, IP: " + ip, "");
     Serial.println("WiFi reconnected. IP: " + ip);
+    timeClient.begin();
+    // Ожидаем успешной синхронизации NTP
+    int ntpAttempts = 0;
+    while (!timeClient.update() && ntpAttempts < 5) {
+      Serial.println("NTP sync attempt " + String(ntpAttempts + 1));
+      delay(500);
+      ntpAttempts++;
+    }
+    if (timeClient.isTimeSet()) {
+      bootTime = timeClient.getEpochTime();
+      Serial.println("NTP synced. BootTime: " + String(bootTime));
+    } else {
+      bootTime = millis() / 1000;
+      Serial.println("NTP sync failed. Using millis: " + String(bootTime));
+    }
+    clearOldMessages(); // Очищаем старые сообщения
     displayNeedsUpdate = true;
   }
 
@@ -236,77 +357,164 @@ void loop() {
           continue;
         }
         String text = bot.messages[i].text;
+        long messageTime = bot.messages[i].date.toInt();
         String from_name = bot.messages[i].from_name;
         if (from_name == "") from_name = "Guest";
-        lastCommand = text;
-        Serial.println("Command: " + text + " from " + from_name);
+        Serial.println("Received message: " + text + ", Time: " + String(messageTime) + ", BootTime: " + String(bootTime));
+        lastCommand = text; // Обновляем lastCommand для всех сообщений
+        Serial.println("Processing command: " + text + " from " + from_name);
         if (text == "/start" || text == "/c") {
           showCommands(chat_id, from_name);
-          displayNeedsUpdate = true;
-          handleActivity();
         } else if (text == "/setpin") {
           int newPin = (relayPin == 26) ? 32 : 26;
           setRelayPin(newPin);
           bot.sendMessage(chat_id, "Relay pin set to: G" + String(relayPin), "");
-          displayNeedsUpdate = true;
-          handleActivity();
         } else if (text == "/trigger") {
           isLowLevelTrigger = !isLowLevelTrigger;
           String trigger = isLowLevelTrigger ? "Low" : "High";
           bot.sendMessage(chat_id, "Relay trigger set to: " + trigger, "");
           Serial.println("Relay trigger set to: " + trigger);
           setRelayState(computerOn);
-          displayNeedsUpdate = true;
-          handleActivity();
         } else if (text == "/pulse") {
-          if (computerOn) {
-            bot.sendMessage(chat_id, "Cannot send pulse while ON", "");
-            Serial.println("Cannot send pulse while ON");
-          } else {
-            setRelayState(true);
-            delay(pulseDelay);
-            setRelayState(false);
-            bot.sendMessage(chat_id, "Pulse sent", "");
-            Serial.println("Pulse sent");
-          }
-          displayNeedsUpdate = true;
-          handleActivity();
+          executeCommand("pulse");
         } else if (text == "/turn_on") {
-          if (!computerOn) {
-            setRelayState(true);
-            computerOn = true;
-            bot.sendMessage(chat_id, "SET ON", "");
-            Serial.println("SET ON");
-          } else {
-            bot.sendMessage(chat_id, "Already ON", "");
-            Serial.println("Already ON");
-          }
-          displayNeedsUpdate = true;
-          handleActivity();
+          executeCommand("turn_on");
         } else if (text == "/turn_off") {
-          if (computerOn) {
-            setRelayState(false);
-            computerOn = false;
-            bot.sendMessage(chat_id, "SET OFF", "");
-            Serial.println("SET OFF");
-          } else {
-            bot.sendMessage(chat_id, "Already OFF", "");
-            Serial.println("Already OFF");
-          }
-          displayNeedsUpdate = true;
-          handleActivity();
+          executeCommand("turn_off");
         } else if (text == "/status" || text == "/s") {
           showStatus(chat_id);
-          displayNeedsUpdate = true;
-          handleActivity();
+        } else if (text.startsWith("/schedule")) {
+          String params = text.substring(10);
+          int spaceIndex = params.indexOf(' ');
+          String timeStr = params.substring(0, spaceIndex);
+          String command = params.substring(spaceIndex + 1);
+          int colonIndex = timeStr.indexOf(':');
+          if (colonIndex == -1 || spaceIndex == -1) {
+            bot.sendMessage(chat_id, "Invalid format. Use /schedule HH:MM pulse|turn_on|turn_off", "");
+          } else {
+            int hour = timeStr.substring(0, colonIndex).toInt();
+            int minute = timeStr.substring(colonIndex + 1).toInt();
+            if (scheduleCount < 10 && (command == "pulse" || command == "turn_on" || command == "turn_off") && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+              insertSortedSchedule(hour, minute, command);
+              bot.sendMessage(chat_id, "Schedule set for " + timeStr + " to execute " + command, "");
+            } else {
+              bot.sendMessage(chat_id, "Invalid time or command. Use /schedule HH:MM pulse|turn_on|turn_off", "");
+            }
+          }
+        } else if (text.startsWith("/remove_schedule")) {
+          String timeStr = text.substring(16);
+          int colonIndex = timeStr.indexOf(':');
+          if (colonIndex == -1) {
+            bot.sendMessage(chat_id, "Invalid format. Use /remove_schedule HH:MM", "");
+          } else {
+            int hour = timeStr.substring(0, colonIndex).toInt();
+            int minute = timeStr.substring(colonIndex + 1).toInt();
+            bool found = false;
+            for (int j = 0; j < scheduleCount; j++) {
+              if (schedules[j].hour == hour && schedules[j].minute == minute) {
+                for (int k = j; k < scheduleCount - 1; k++) {
+                  schedules[k] = schedules[k + 1];
+                }
+                scheduleCount--;
+                bot.sendMessage(chat_id, "Schedule at " + timeStr + " removed", "");
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              bot.sendMessage(chat_id, "No schedule found at " + timeStr, "");
+            }
+          }
+        } else if (text == "/list_schedules") {
+          String list = "Schedules:\n";
+          for (int j = 0; j < scheduleCount; j++) {
+            list += String(schedules[j].hour) + ":" + (schedules[j].minute < 10 ? "0" : "") + String(schedules[j].minute) + " - " + schedules[j].command + "\n";
+          }
+          bot.sendMessage(chat_id, list == "Schedules:\n" ? "No schedules set" : list, "");
+        } else if (text.startsWith("/timer")) {
+          String params = text.substring(7);
+          int spaceIndex = params.indexOf(' ');
+          String timeStr = params.substring(0, spaceIndex);
+          String command = params.substring(spaceIndex + 1);
+          int colonIndex = timeStr.indexOf(':');
+          if (colonIndex == -1 || spaceIndex == -1) {
+            bot.sendMessage(chat_id, "Invalid format. Use /timer HH:MM pulse|turn_on|turn_off", "");
+          } else {
+            int hours = timeStr.substring(0, colonIndex).toInt();
+            int minutes = timeStr.substring(colonIndex + 1).toInt();
+            if (timerCount < 10 && (command == "pulse" || command == "turn_on" || command == "turn_off") && hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+              unsigned long delay = hours * 3600000UL + minutes * 60000UL;
+              if (delay > 0) {
+                timers[timerCount] = {millis(), delay, command};
+                timerCount++;
+                bot.sendMessage(chat_id, "Timer set for " + timeStr + " to execute " + command, "");
+              } else {
+                bot.sendMessage(chat_id, "Timer duration must be greater than 0", "");
+              }
+            } else {
+              bot.sendMessage(chat_id, "Invalid time or command. Use /timer HH:MM pulse|turn_on|turn_off", "");
+            }
+          }
+        } else if (text.startsWith("/remove_timer")) {
+          String indexStr = text.substring(13);
+          int index = indexStr.toInt() - 1;
+          if (index >= 0 && index < timerCount) {
+            for (int j = index; j < timerCount - 1; j++) {
+              timers[j] = timers[j + 1];
+            }
+            timerCount--;
+            bot.sendMessage(chat_id, "Timer " + String(index + 1) + " removed", "");
+          } else {
+            bot.sendMessage(chat_id, "Invalid timer index. Check /list_timers", "");
+          }
+        } else if (text == "/list_timers") {
+          String list = "Timers:\n";
+          for (int j = 0; j < timerCount; j++) {
+            unsigned long remainingMs = timers[j].delay - (millis() - timers[j].startTime);
+            int hours = remainingMs / 3600000;
+            int minutes = (remainingMs % 3600000) / 60000;
+            list += "Timer " + String(j + 1) + ": " + String(hours) + ":" + (minutes < 10 ? "0" : "") + String(minutes) + " - " + timers[j].command + "\n";
+          }
+          bot.sendMessage(chat_id, list == "Timers:\n" ? "No timers set" : list, "");
+        } else if (text == "/shutdown") {
+          bot.sendMessage(chat_id, "Shutting down...", "");
+          M5.Power.deepSleep();
         } else {
           bot.sendMessage(chat_id, "Invalid command", "");
           Serial.println("Invalid command: " + text);
         }
+        displayNeedsUpdate = true;
         handleActivity();
       }
     }
     lastTimeBotRan = millis();
+  }
+
+  // Проверка расписаний
+  timeClient.update();
+  int currentHour = timeClient.getHours();
+  int currentMinute = timeClient.getMinutes();
+  static int lastCheckedMinute = -1; // Для предотвращения многократного срабатывания
+  if (currentMinute != lastCheckedMinute) {
+    for (int i = 0; i < scheduleCount; i++) {
+      if (schedules[i].hour == currentHour && schedules[i].minute == currentMinute) {
+        executeCommand(schedules[i].command);
+      }
+    }
+    lastCheckedMinute = currentMinute;
+  }
+
+  // Проверка таймеров
+  for (int i = 0; i < timerCount; i++) {
+    if (millis() - timers[i].startTime >= timers[i].delay) {
+      executeCommand(timers[i].command);
+      // Удаляем таймер
+      for (int j = i; j < timerCount - 1; j++) {
+        timers[j] = timers[j + 1];
+      }
+      timerCount--;
+      i--;
+    }
   }
 
   if (autoOffEnabled && !screenAsleep && (millis() - lastActivityTime > autoOffTimeout)) {
